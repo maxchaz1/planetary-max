@@ -7,5 +7,13 @@ PLANETARY_MODE = "single"
 UMBRELLA_ENFORCEMENT = "strict"
 MAXOS_MODULE = "local"
 
+[[durable_objects.bindings]]
+name = "PORTAL_KERNEL"
+class_name = "PortalKernel"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PortalKernel"]
+
 [build]
 command = "npm run build"
