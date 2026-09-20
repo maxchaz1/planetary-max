@@ -1,152 +1,70 @@
 import { Hono } from 'hono';
+import { createEnforcementMiddleware } from './maxos/middleware/enforcement';
+import { defaultLogger } from './maxos/observability/logger';
+import { defaultMetrics } from './maxos/observability/metrics';
+import { KernelError, MaxOsError, toErrorResponse } from './maxos/resilience/errors';
+import { KernelClient } from './maxos/resilience/kernel';
+import { parsePositiveInteger } from './maxos/resilience/timeouts';
+import { SessionOrchestrator } from './maxos/session/orchestrator';
+import { createDurableSubstrate } from './maxos/state/substrate';
+import type { MaxOsHonoEnv } from './maxos/types';
 
-type KernelEnvelope = {
-  id: string;
-  type: string;
-  payload: Record<string, unknown>;
-  identity: string;
-  governanceContext: Record<string, unknown>;
-};
+const app = new Hono<MaxOsHonoEnv>();
 
-type KernelService = {
-  fetch(request: Request): Promise<Response>;
-};
-
-type Bindings = {
-  KERNEL_SERVICE?: KernelService;
-  KERNEL_URL?: string;
-};
-
-type KernelResult = {
-  ok?: boolean;
-  error?: { code?: string; message?: string };
-  [key: string]: unknown;
-};
-
-const app = new Hono<{ Bindings: Bindings }>();
-
-// ⭐ ROOT ROUTE — this fixes the 404 at /
-app.get('/', (c) => {
-  return c.json({
-    status: 'Portal‑OS live',
-    worker: 'plantetary-max',
-    mode: c.env.PLANETARY_MODE,
-    umbrella: c.env.UMBRELLA_ENFORCEMENT
-  });
-});
-
-app.get('/health', (c) => c.json({ status: 'ok', service: 'portal-os-worker' }));
-
-app.post('/api/kernel/message', async (c) => {
-  const identity = bearerToken(c.req.header('Authorization'));
-  if (!identity) return c.json({ ok: false, error: { code: 'UNAUTHENTICATED', message: 'Bearer token required' } }, 401);
-
-  let body: unknown;
+app.use('*', createEnforcementMiddleware(defaultLogger, defaultMetrics));
+app.all('*', async (c) => {
+  const observability = c.get('maxosObservability');
   try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ ok: false, error: { code: 'INVALID_JSON', message: 'Request body must be JSON' } }, 400);
-  }
-  if (!isRecord(body) || typeof body.type !== 'string') {
-    return c.json({ ok: false, error: { code: 'INVALID_MESSAGE', message: 'type and object payload are required' } }, 400);
-  }
-  const payload = body.payload === undefined ? {} : body.payload;
-  if (!isRecord(payload)) {
-    return c.json({ ok: false, error: { code: 'INVALID_MESSAGE', message: 'type and object payload are required' } }, 400);
-  }
-  const envelope = createEnvelope(
-    body.type,
-    payload,
-    identity,
-    isRecord(body.governanceContext) ? body.governanceContext : {},
-  );
-  return kernelResponse(c.env, envelope);
-});
-
-app.get('/universe/state', async (c) => universeRequest(c.env, c.req.header('Authorization'), 'universe.state', {}));
-app.get('/universe/umbrella', async (c) => universeRequest(c.env, c.req.header('Authorization'), 'universe.umbrella', {}));
-app.post('/universe/tick', async (c) => {
-  let payload: Record<string, unknown> = {};
-  const contentType = c.req.header('Content-Type') ?? '';
-  if (contentType.includes('application/json')) {
-    try {
-      const body: unknown = await c.req.json();
-      if (!isRecord(body)) return c.json({ ok: false, error: { code: 'INVALID_JSON', message: 'Tick payload must be an object' } }, 400);
-      payload = body;
-    } catch {
-      return c.json({ ok: false, error: { code: 'INVALID_JSON', message: 'Request body must be JSON' } }, 400);
+    const maxAttempts = parsePositiveInteger(c.env.MAX_RETRY_ATTEMPTS, 'MAX_RETRY_ATTEMPTS', 10);
+    const retryBaseDelayMs = parsePositiveInteger(c.env.RETRY_BASE_DELAY_MS, 'RETRY_BASE_DELAY_MS', 10_000);
+    const substrate = createDurableSubstrate(c.env.MAXOS_STATE, {
+      observability,
+      retry: { baseDelayMs: retryBaseDelayMs, maxAttempts },
+      timeoutMs: parsePositiveInteger(c.env.SUBSTRATE_TIMEOUT_MS, 'SUBSTRATE_TIMEOUT_MS'),
+    });
+    const orchestrator = new SessionOrchestrator(substrate);
+    const envelope = await orchestrator.routeEnvelope(c.get('maxosEnvelope'), c.env);
+    const kernelClient = new KernelClient(
+      c.env.KERNEL_SERVICE,
+      {
+        circuit: {
+          cooldownMs: parsePositiveInteger(c.env.CIRCUIT_COOLDOWN_MS, 'CIRCUIT_COOLDOWN_MS'),
+          failureThreshold: parsePositiveInteger(c.env.CIRCUIT_FAILURE_THRESHOLD, 'CIRCUIT_FAILURE_THRESHOLD', 100),
+        },
+        retry: { baseDelayMs: retryBaseDelayMs, maxAttempts },
+        timeoutMs: parsePositiveInteger(c.env.KERNEL_TIMEOUT_MS, 'KERNEL_TIMEOUT_MS'),
+      },
+      observability,
+    );
+    const kernel = await kernelClient.fetch(c.req.url, c.req.raw.headers, envelope);
+    const responseHeaders = new Headers(kernel.headers);
+    responseHeaders.delete('content-encoding');
+    responseHeaders.delete('content-length');
+    if ([204, 205, 304].includes(kernel.status)) {
+      return new Response(null, { status: kernel.status, headers: responseHeaders });
     }
-  }
-  return universeRequest(c.env, c.req.header('Authorization'), 'universe.tick', payload);
-});
-
-async function universeRequest(
-  env: Bindings,
-  authorization: string | undefined,
-  type: string,
-  payload: Record<string, unknown>,
-): Promise<Response> {
-  const identity = bearerToken(authorization);
-  if (!identity) {
-    return Response.json({ ok: false, error: { code: 'UNAUTHENTICATED', message: 'Bearer token required' } }, { status: 401 });
-  }
-  return kernelResponse(env, createEnvelope(type, payload, identity, { surface: 'worker-universe' }));
-}
-
-function createEnvelope(
-  type: string,
-  payload: Record<string, unknown>,
-  identity: string,
-  governanceContext: Record<string, unknown>,
-): KernelEnvelope {
-  return { id: crypto.randomUUID(), type, payload, identity, governanceContext };
-}
-
-async function kernelResponse(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
-  try {
-    const response = await callKernel(env, envelope);
-    const result = await response.json<KernelResult>();
-    const status = result.ok === false ? kernelErrorStatus(result.error?.code) : response.status;
-    return Response.json(result, { status });
+    const normalized = orchestrator.normalizeKernelResponse(
+      await kernel.json<unknown>(),
+      envelope,
+      kernel.status,
+    );
+    responseHeaders.set('content-type', 'application/json');
+    return Response.json(normalized, {
+      status: kernel.status,
+      headers: responseHeaders,
+    });
   } catch (error) {
-    console.error('Worker to kernel bridge failed', error);
-    return Response.json(
-      { ok: false, error: { code: 'KERNEL_UNAVAILABLE', message: 'Kernel bridge unavailable' } },
-      { status: 503 },
+    observability.metrics.increment('maxos_failures_total', { stage: 'worker' });
+    observability.logger.error('request.failed', {
+      errorCode: error instanceof MaxOsError ? error.code : 'KERNEL_UNAVAILABLE',
+    });
+    return toErrorResponse(
+      error instanceof SyntaxError
+        ? new KernelError('Kernel returned invalid JSON', 'KERNEL_INVALID_RESPONSE', 502)
+        : error,
     );
   }
-}
+});
 
-async function callKernel(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
-  const body = JSON.stringify(envelope);
-  const request = new Request('http://kernel/api/kernel/message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
-  if (env.KERNEL_SERVICE) return env.KERNEL_SERVICE.fetch(request);
-  if (env.KERNEL_URL) {
-    const target = `${env.KERNEL_URL.replace(/\/$/, '')}/api/kernel/message`;
-    return fetch(target, { method: 'POST', headers: request.headers, body });
-  }
-  throw new Error('Configure KERNEL_SERVICE or KERNEL_URL');
-}
-
-function bearerToken(header: string | undefined): string | null {
-  const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
-  return match?.[1]?.trim() || null;
-}
-
-function kernelErrorStatus(code: string | undefined): number {
-  if (code === 'UNAUTHENTICATED') return 401;
-  if (code === 'FORBIDDEN') return 403;
-  if (code === 'INVALID_MESSAGE' || code === 'INVALID_JSON') return 400;
-  return 500;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export { app, createEnvelope };
+export { app };
 export default app;
