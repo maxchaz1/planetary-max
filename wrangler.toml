@@ -1,11 +1,23 @@
 name = "planetary-max"
 main = "src/index.ts"
-compatibility_date = "2024-09-01"
+compatibility_date = "2026-09-17"
 
 [vars]
 PLANETARY_MODE = "single"
 UMBRELLA_ENFORCEMENT = "strict"
-MAXOS_MODULE = "local"
+
+[durable_objects]
+bindings = [
+  { name = "PORTAL_KERNEL", class_name = "PortalKernel" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PortalKernel"]
+
+[[services]]
+binding = "MAX_OS_1"
+service = "max-os-1"
 
 [build]
 command = "npm run build"
