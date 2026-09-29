@@ -12,13 +12,9 @@ IDENTITY_JWT_AUDIENCE = "planetary-max"
 name = "PORTAL_KERNEL"
 class_name = "PortalKernel"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["PortalKernel"]
+[build]
+command = "npm run build"
 
 [[services]]
 binding = "MAX_OS_1"
 service = "max-os-1"
-
-[build]
-command = "npm run build"
