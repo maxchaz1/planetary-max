@@ -24,3 +24,7 @@ bucket_name = "planetary-max-state"
 
 [build]
 command = "npm run build"
+
+[[services]]
+binding = "MAX_OS_1"
+service = "max-os-1"

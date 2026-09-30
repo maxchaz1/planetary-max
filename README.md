@@ -126,20 +126,25 @@ variables in `wrangler.toml`.
 python kernel/http_adapter.py --port 8788
 ```
 
-The one-message synchronous bridge is also available directly:
+Successful kernel responses expose aligned `lanes`, `results`, and `output`
+fields. GUI routes normalize `output` into `{ ok, data, meta }`.
+
+OS-level messages use an `os.` prefix, for example `os.identity`. When
+`MAX_OS_1` or `MAXOS_URL` is configured, `callKernel()` adapts and forwards
+those envelopes to MAX-OS-1 at `/kernel/message`. The explicit
+`POST /os/kernel/message` route provides the same authenticated bridge for
+callers that do not use an `os.*` type. MAX-OS-1 is never called by the GUI
+directly, and MAX-OS-1 does not call planetary-max.
+
+The Durable Object binding and its SQLite migration are declared in
+`wrangler.toml`. Deploy them together with:
 
 ```bash
-export PORTAL_SERVICE_TOKEN="a-locally-generated-secret"
-printf '%s' '{"id":"demo","type":"sim","payload":{},"identity":"a-locally-generated-secret","governanceContext":{}}' \
-  | python kernel/boot.py --message
+npm test
+npm run check
+npx wrangler deploy --dry-run
+npx wrangler deploy
 ```
-
-Identity tokens are loaded from `PORTAL_SYSTEM_TOKEN`, `PORTAL_SERVICE_TOKEN`,
-and `PORTAL_OBSERVER_TOKEN`; there are no built-in production credentials.
-
-Set `MAXOS_MODULE` to the installed MAX-OS-1 Python module exporting
-`MaxOsUnifiedOrchestrator`. Without it, a deterministic in-memory universe is
-used for local development and integration tests.
 
 ## Development
 
@@ -152,7 +157,9 @@ python -c "from kernel.invariants import InvariantChecker; InvariantChecker().ch
 
 ```bash
 python tests/integration_rebuild2.py
+npm test
 npm run check
+npm test
 ```
 
 ## Status
@@ -160,10 +167,10 @@ npm run check
 - **Rebuild 2**: Complete
 - **Architecture**: Defined
 - **Core Modules**: Initialized
-- **Next Phase**: Deploy the Python adapter and connect the external MAX-OS-1 package
+- **Next Phase**: Configure the optional MAX-OS-1 service binding in each Cloudflare environment
 
 ---
 
-**Last Updated**: 2026-08-27  
+**Last Updated**: 2026-09-21
 **Rebuild Phase**: 2  
 **Status**: Integrated architecture foundation
