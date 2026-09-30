@@ -22,7 +22,7 @@ export type KernelService = {
 
 export type KernelNamespace = {
   idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): KernelService;
+  get(id: DurableObjectId): Fetcher;
 };
 
 export type Bindings = MaxOsEnv & {
@@ -176,7 +176,9 @@ app.post('/universe/tick', async (context) => {
   return normalizedRequest(context.env, context.req.header('Authorization'), 'universe.tick', payload);
 });
 
-async function normalizedRequest(
+attachIntrospectionRoutes(app);
+
+async function routeKernelMessage(
   env: Bindings,
   authorization: string | undefined,
   type: string,
@@ -187,9 +189,35 @@ async function normalizedRequest(
   return kernelResponse(env, createEnvelope(type, payload, identity, { surface: 'worker-api' }), true);
 }
 
-async function umbrellaRequest(
-  env: Bindings,
+async function parseEnvelope(
+  request: Request,
   authorization: string | undefined,
+  env: Bindings
+): Promise<KernelEnvelope | Response> {
+  const identity = await authenticatedIdentity(authorization, env);
+  if (identity instanceof Response) return identity;
+
+  const body = await readJsonObject(request, 'Request body must be JSON');
+  if (body instanceof Response) return body;
+
+  if (
+    typeof body.type !== 'string' ||
+    !body.type.trim() ||
+    (body.payload !== undefined && !isRecord(body.payload))
+  ) {
+    return failureResponse('INVALID_MESSAGE', 'type and object payload are required', 400);
+  }
+
+  return createEnvelope(
+    body.type,
+    body.payload ?? {},
+    identity,
+    isRecord(body.governanceContext) ? body.governanceContext : {},
+    env.UMBRELLA_ENFORCEMENT
+  );
+}
+
+async function parsePayload(
   request: Request,
   type: UmbrellaOperation,
 ): Promise<Response> {
@@ -197,7 +225,8 @@ async function umbrellaRequest(
   if (!identity) return unauthenticated();
   let payload: unknown;
   try {
-    payload = await request.json();
+    const value: unknown = await request.json();
+    return isRecord(value) ? value : failureResponse('INVALID_JSON', message, 400);
   } catch {
     return invalidJson('Umbrella payload must be JSON');
   }
@@ -219,11 +248,7 @@ export function createEnvelope(
   return { id, type, payload, identity, governanceContext };
 }
 
-async function kernelResponse(
-  env: Bindings,
-  envelope: KernelEnvelope,
-  normalize = false,
-): Promise<Response> {
+async function kernelResponse(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
   try {
     const response = await callKernel(env, envelope);
     const result = await response.json<KernelResult>();
@@ -246,7 +271,8 @@ export function normalizeResponse(
   if (!result.ok) return result;
   return {
     ok: true,
-    data: extractLaneData(result),
+    data,
+    lanes,
     meta: {
       messageId: result.messageId ?? envelope.id,
       type: result.type ?? envelope.type,
@@ -288,6 +314,7 @@ export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promi
     headers: { 'Content-Type': 'application/json' },
     body,
   });
+}
 
   if (env.PORTAL_KERNEL) {
     const id = env.PORTAL_KERNEL.idFromName('portal-kernel');
@@ -301,9 +328,8 @@ export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promi
   throw new Error('Configure PORTAL_KERNEL, KERNEL_SERVICE or KERNEL_URL');
 }
 
-function bearerToken(header: string | undefined): string | null {
-  const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
-  return match?.[1]?.trim() || null;
+export function resolveUmbrellaMode(value: string | undefined): UmbrellaMode {
+  return value === 'advisory' || value === 'off' || value === 'strict' ? value : 'strict';
 }
 
 function kernelErrorStatus(code: string): number {

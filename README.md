@@ -157,6 +157,7 @@ python -c "from kernel.invariants import InvariantChecker; InvariantChecker().ch
 python tests/integration_rebuild2.py
 npm test
 npm run check
+npm test
 ```
 
 ## Status
@@ -168,6 +169,6 @@ npm run check
 
 ---
 
-**Last Updated**: 2026-08-27  
+**Last Updated**: 2026-09-21
 **Rebuild Phase**: 2  
 **Status**: Integrated architecture foundation

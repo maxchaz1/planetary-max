@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  fail_commit_status: true
+  path_filters:
+    # CodeRabbit ignores dist directories by default. Include them so reviews can
+    # reject generated output instead of silently omitting it from the diff.
+    - "**/*"
+    - "**/dist/**"
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        Apply these rules to every changed file and every proposed fix. Evaluate
+        the current change and the behavior it affects; do not request unrelated
+        cleanup of untouched legacy code.
+
+        Architecture and language
+        - This repository is the Worker-only Planetary-MAX component of the
+          Portal-OS / MAX-OS-1 Umbrella ecosystem. Reject UI, Cloudflare Pages,
+          frontend assets, and committed dist output.
+        - New executable source must be TypeScript. Reject JavaScript, implicit
+          any, loose typing, unused imports, dead code, commented-out code,
+          unresolved TODOs, and production console logging.
+        - Prefer pure functions and deterministic state transitions. Permit side
+          effects only at explicit Cloudflare Worker or Durable Object runtime
+          boundaries. Reject mutable global state and nondeterministic behavior.
+
+        Worker surface and bindings
+        - All routes and windows must be explicitly declared. Reject wildcard
+          routes, generated endpoints, automatic route enumeration, and implicit
+          surface expansion.
+        - Preserve these declared bindings exactly: PORTAL_KERNEL (Durable Object),
+          MAX_OS_1 (Worker service), PLANETARY_MODE, UMBRELLA_ENFORCEMENT,
+          IDENTITY_JWT_ISSUER, and IDENTITY_JWT_AUDIENCE. Do not suggest renaming,
+          removing, replacing, or dynamically changing them.
+        - Keep the PortalKernel Durable Object substrate deterministic and
+          compatible with MAX-OS-1. Do not auto-generate kernel routes.
+
+        Identity and Umbrella enforcement
+        - Require strict bearer JWT validation on every operator lane. Accept
+          HS256 only, issuer "portal-login" only, and audience "planetary-max"
+          only. Reject fallbacks, alternate issuers or audiences, permissive
+          validation, and authentication bypasses.
+        - UMBRELLA_ENFORCEMENT must remain "strict". Reject soft, advisory, off,
+          debug, or bypass modes.
+        - Preserve MAX-Physics identity-as-curvature semantics: identity is
+          curvature and signature is structure. Do not flatten or linearize the
+          identity model, and keep identity curvature quantum-structured.
+
+        SIM, PMD, and structural truth
+        - Keep SIM routes isolated. Reject automatic world expansion, implicit
+          NPC generation, nondeterministic SIM behavior, and changes incompatible
+          with identity-driven agents or the MAX-Quantumn Suite.
+        - Preserve PMD (Primary Modal Dichotomy) lanes and modal identity. Do not
+          collapse or alter the dichotomy.
+        - Preserve quantum-structured architecture, structural truth, and
+          truth-preserving logic. Reject classical fallback modes, undefined
+          nondeterministic quantum simulation, ambiguous behavior, and linear
+          state machines that replace the required quantum structure.
+
+        Security and dependencies
+        - Reject new external dependencies unless the PR documents explicit
+          approval. Use WebCrypto exclusively for cryptography.
+        - Reject secret or environment-variable disclosure, permissive CORS,
+          unvalidated input, and logging outside the OS logging substrate.
+
+        Review decision
+        - Request changes when any rule above is violated. Approve only when the
+          change is deterministic, preserves bindings and architecture, keeps
+          Umbrella strict mode and identity curvature intact, maintains stable
+          kernel and isolated SIM behavior, preserves PMD and structural truth,
+          and introduces no Pages, UI, frontend, or dist artifacts.
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: true
+
+  pre_merge_checks:
+    override_requested_reviewers_only: true
+    custom_checks:
+      - name: Umbrella architecture compliance
+        mode: error
+        instructions: |
+          Evaluate the files changed by this pull request and the behavior directly
+          affected by them. Fail if any condition below is false:
+
+          1. The change remains Worker-only and adds no UI, Cloudflare Pages,
+             frontend assets, JavaScript source, or committed dist output. New
+             executable source is strictly typed TypeScript.
+          2. The declared bindings remain exactly PORTAL_KERNEL, MAX_OS_1,
+             PLANETARY_MODE, UMBRELLA_ENFORCEMENT, IDENTITY_JWT_ISSUER, and
+             IDENTITY_JWT_AUDIENCE, with no rename, removal, replacement, or
+             dynamic mutation.
+          3. JWT validation remains strict HS256 with issuer "portal-login" and
+             audience "planetary-max". Every affected operator lane validates its
+             bearer token and has no fallback, permissive mode, or bypass.
+          4. Umbrella enforcement remains strictly "strict" with no advisory,
+             soft, off, debug, or bypass mode.
+          5. Routes and windows are explicit; the change adds no wildcard routing,
+             generated endpoints, automatic enumeration, or implicit expansion.
+          6. Kernel and SIM behavior is deterministic. SIM routes stay isolated;
+             worlds and NPCs do not auto-expand or auto-generate; mutable global
+             state and undefined nondeterminism are absent.
+          7. The observable PMD, MAX-Physics, quantum-structure, and structural-
+             truth contract remains intact: in `src/index.ts`, `laneForType`
+             continues to map `identity.physics.license` to
+             `umbrella.identity-physics`, `structural.truth.license` to
+             `umbrella.structural-truth`, and other Umbrella or license
+             operations to `umbrella.sim`; the PortalKernel umbrella state and
+             delta responses continue to set `osTruthInvariants.identityRequired`
+             and `osTruthInvariants.structuralTruth` to `true`; and
+             `tests/portal-worker.test.ts` retains assertions for the identity-
+             physics and structural-truth routes. Fail any change that removes,
+             remaps, disables, or bypasses these lanes, invariants, or tests.
+          8. The change has no unapproved external dependency, non-WebCrypto
+             cryptography, secret disclosure, permissive CORS, unvalidated input,
+             production console logging, unresolved TODO, unused import, dead code,
+             or logging outside the OS logging substrate.
+
+          Pass only when all eight conditions hold. Otherwise fail and identify the
+          exact changed file and violated condition.
