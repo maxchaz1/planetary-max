@@ -514,4 +514,65 @@ function resolveEnvelopeMode(envelope: KernelEnvelope): UmbrellaMode {
   );
 }
 
-function defaultGovern
+function defaultGovernance(mode: UmbrellaMode): GovernanceMetadata {
+  return {
+    mode,
+    decision:
+      mode === 'strict'
+        ? 'denied'
+        : mode === 'advisory'
+        ? 'advisory'
+        : 'bypassed',
+    deltas: []
+  };
+}
+
+function governanceFromUnknown(
+  value: unknown,
+  envelope: KernelEnvelope
+): GovernanceMetadata {
+  if (
+    isRecord(value) &&
+    typeof value.mode === 'string' &&
+    typeof value.decision === 'string' &&
+    Array.isArray(value.deltas)
+  ) {
+    return value as GovernanceMetadata;
+  }
+
+  return defaultGovernance(resolveEnvelopeMode(envelope));
+}
+
+function laneForType(type: string): string {
+  const idx = type.lastIndexOf('.');
+  return idx >= 0 ? type.slice(0, idx) : type;
+}
+
+function makeLane(
+  name: string,
+  data: Record<string, unknown>,
+  source: string,
+  mode: UmbrellaMode
+): KernelLane {
+  return {
+    name,
+    result: {
+      results: [
+        {
+          result: {
+            data,
+            meta: { source, governance: mode }
+          }
+        }
+      ]
+    }
+  };
+}
+
+function umbrellaUpdateName(type: string): string {
+  return type.startsWith('umbrella.') ? type : `umbrella.${type}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
