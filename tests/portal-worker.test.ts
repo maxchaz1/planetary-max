@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PortalKernel } from '../src/do/PortalKernel';
 import {
-  PortalKernel,
   app,
   createEnvelope,
   extractLaneData,
@@ -11,7 +11,7 @@ import {
   type KernelLane,
 } from '../src/index';
 
-const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXIiLCJpc3MiOiJwb3J0YWwtbG9naW4iLCJhdWQiOiJwbGFuZXRhcnktbWF4IiwiZXhwIjo0MTAyNDQ0ODAwfQ.MWNP0Fu3Ky8BUTACh5fSViDpRZL2SkN5moFjzAvQAwg';
+const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXIiLCJpc3MiOiJwb3J0YWwtbG9naW4iLCJhdWQiOiJwbGFuZXRhcnktbWF4IiwiZXhwIjo0MTAyNDQ0ODAwfQ.MWNP0Fu3Ky8BUTACh5fSViDpRZL2SkN5moFjz[...]
 const IDENTITY_JWT_SECRET = 'unit-test-signing-secret';
 
 class MemoryStorage {
