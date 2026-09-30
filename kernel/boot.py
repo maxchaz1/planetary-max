@@ -15,6 +15,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from governance.engine import GovernanceEngine
 from identity.registry import IdentityError, IdentityRegistry
+from kernel.introspection import IntrospectionLayer
+from kernel.introspection_dispatch import handle_introspection
 from kernel.invariants import InvariantChecker
 from kernel.scheduler import MultiDomainScheduler
 from routing.router import Router, RoutingError
@@ -51,6 +53,7 @@ class Kernel:
         self.governance: Optional[GovernanceEngine] = None
         self.scheduler: Optional[MultiDomainScheduler] = None
         self.router: Optional[Router] = None
+        self.introspection = IntrospectionLayer()
 
     def load_invariants(self) -> None:
         self.state.phase = KernelPhase.INVARIANTS
@@ -73,6 +76,7 @@ class Kernel:
             "tec": "tec.pipelines.TECPipeline",
             "substrate": "substrate.state_model.SubstrateState",
             "maxos": "maxos_bridge.universe",
+            "introspection": "kernel.introspection.IntrospectionLayer",
         }
         LOGGER.info("modules loaded count=%d", len(self.state.modules))
 
@@ -129,7 +133,12 @@ class Kernel:
             routed["_route"] = list(decision.lanes)
             routed["_sequence"] = self.router.sequence
             routed["_identity"] = decision.identity.as_dict()
-            result = self.scheduler.schedule(routed)
+
+            if envelope["type"].startswith("introspection."):
+                result = handle_introspection(envelope, self.introspection)
+            else:
+                result = self.scheduler.schedule(routed)
+
             self._validate_runtime_invariants()
             return {
                 "ok": True,
