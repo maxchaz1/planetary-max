@@ -19,6 +19,14 @@ new_sqlite_classes = ["PortalKernel"]
 binding = "MAX_OS_1"
 service = "max-os-1"
 
+[[durable_objects.bindings]]
+name = "PORTAL_KERNEL"
+class_name = "PortalKernel"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PortalKernel"]
+
 [build]
 command = "npm run build"
 
