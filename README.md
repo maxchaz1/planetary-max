@@ -107,72 +107,42 @@ This will execute the full boot sequence:
 
 ### Worker and Kernel Bridge
 
-The production Worker uses the `PORTAL_KERNEL` Durable Object binding as its
-only kernel bridge. Universe, umbrella, and generic kernel requests all pass
-through the same `/api/kernel/message` Durable Object endpoint. OS-level
-requests are governance-preflighted by the Durable Object and then forwarded
-through the typed `MAX_OS_1` service binding. No deployed Worker URL is stored
-in application code or configuration.
+The Hono Worker is the only public entrypoint. It validates the GUI bearer
+token, builds the shared envelope, and calls the `PortalKernel` Durable Object
+through `callKernel()`. The Durable Object owns the lane registry and persists
+SIM, substrate, and universe state in Durable Object storage.
 
-The Python adapter remains available for local kernel regression development:
+The shared envelope is:
 
-```bash
-python kernel/http_adapter.py --port 8788
+```json
+{
+  "id": "message-123",
+  "type": "sim",
+  "payload": { "observation": "stable" },
+  "identity": "bearer-token",
+  "governanceContext": {}
+}
 ```
 
-The one-message synchronous bridge is also available directly:
+Successful kernel responses expose aligned `lanes`, `results`, and `output`
+fields. GUI routes normalize `output` into `{ ok, data, meta }`.
 
-```bash
-export PORTAL_SERVICE_TOKEN="a-locally-generated-secret"
-printf '%s' '{"id":"demo","type":"sim","payload":{},"identity":"a-locally-generated-secret","governanceContext":{}}' \
-  | python kernel/boot.py --message
-```
+OS-level messages use an `os.` prefix, for example `os.identity`. When
+`MAX_OS_1` or `MAXOS_URL` is configured, `callKernel()` adapts and forwards
+those envelopes to MAX-OS-1 at `/kernel/message`. The explicit
+`POST /os/kernel/message` route provides the same authenticated bridge for
+callers that do not use an `os.*` type. MAX-OS-1 is never called by the GUI
+directly, and MAX-OS-1 does not call planetary-max.
 
-Identity tokens are loaded from `PORTAL_SYSTEM_TOKEN`, `PORTAL_SERVICE_TOKEN`,
-and `PORTAL_OBSERVER_TOKEN`; there are no built-in production credentials.
-
-Worker API requests use per-login HS256 JWTs. Configure the shared signing key
-as a server-only Cloudflare secret before deployment; never place it in a GUI
-environment file:
-
-```bash
-npx wrangler secret put IDENTITY_JWT_SECRET
-```
-
-The token must contain `sub` and future `exp` claims. Its issuer and audience
-must match `IDENTITY_JWT_ISSUER` and `IDENTITY_JWT_AUDIENCE` in `wrangler.toml`.
-The Worker verifies the signature and claims before forwarding the original
-token through the kernel and MAX-OS-1 bindings.
-
-Set `MAXOS_MODULE` when running the Python adapter with an installed MAX-OS-1
-module exporting `MaxOsUnifiedOrchestrator`. Without it, Python integration
-tests use a deterministic in-memory universe.
-
-### Cloudflare deployment
-
-`wrangler.toml` declares the `PortalKernel` SQLite Durable Object migration and
-the `MAX_OS_1` service binding to the `max-os-1` Worker. Deploy MAX-OS-1 first,
-then validate and deploy this Worker:
+The Durable Object binding and its SQLite migration are declared in
+`wrangler.toml`. Deploy them together with:
 
 ```bash
 npm test
 npm run check
-python -m unittest discover -s tests -p '*.py'
 npx wrangler deploy --dry-run
-npm run deploy
+npx wrangler deploy
 ```
-
-The first live deploy applies the Durable Object migration. `UMBRELLA_ENFORCEMENT`
-accepts `strict`, `advisory`, or `off` and defaults safely to `strict` for any
-unknown value.
-
-For Cloudflare Workers Builds, set the production **Deploy command** to
-`npm run deploy`. A Durable Object lifecycle migration cannot be applied by
-`wrangler versions upload`, which is the default preview command for
-non-production branches. Until the `v1` migration has been applied from the
-production branch, either disable non-production branch builds or give a
-separate staging Worker a full `wrangler deploy --env staging` flow; do not
-remove the migration to make a preview upload pass.
 
 ## Development
 
@@ -185,6 +155,7 @@ python -c "from kernel.invariants import InvariantChecker; InvariantChecker().ch
 
 ```bash
 python tests/integration_rebuild2.py
+npm test
 npm run check
 npm test
 ```
@@ -194,7 +165,7 @@ npm test
 - **Rebuild 2**: Complete
 - **Architecture**: Defined
 - **Core Modules**: Initialized
-- **Next Phase**: Deploy MAX-OS-1, authenticate Wrangler, deploy planetary-max, then point the GUI environment URLs at the deployed Worker
+- **Next Phase**: Configure the optional MAX-OS-1 service binding in each Cloudflare environment
 
 ---
 

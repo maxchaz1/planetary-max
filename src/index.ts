@@ -1,191 +1,179 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { attachIntrospectionRoutes } from './introspection';
+import {
+  isJsonObject,
+  isRecord,
+  KernelContractError,
+  parseKernelEnvelope,
+  type JsonObject,
+  type KernelEnvelope,
+  type KernelResult,
+} from './contracts';
+import { KernelEngine } from './kernel-engine';
+import {
+  callMaxOsKernel,
+  MaxOsClientError,
+  type MaxOsEnv,
+} from './kernel-bridge/max-os-client';
 
-export type UmbrellaMode = 'strict' | 'advisory' | 'off';
-export type KernelEnvelope = {
-  id: string;
-  type: string;
-  payload: Record<string, unknown>;
-  identity: string;
-  governanceContext: Record<string, unknown>;
+export type KernelService = {
+  fetch(request: Request): Promise<Response>;
 };
 
-type Fetcher = { fetch(request: Request): Promise<Response> };
-type KernelNamespace = {
+export type KernelNamespace = {
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): Fetcher;
 };
 
-export type Bindings = {
+export type Bindings = MaxOsEnv & {
   PORTAL_KERNEL: KernelNamespace;
-  MAX_OS_1: Fetcher;
-  IDENTITY_JWT_SECRET: string;
-  IDENTITY_JWT_ISSUER?: string;
-  IDENTITY_JWT_AUDIENCE?: string;
+  KERNEL_SERVICE?: KernelService;
+  KERNEL_URL?: string;
   PLANETARY_MODE?: string;
   UMBRELLA_ENFORCEMENT?: string;
 };
 
-export type GovernanceMetadata = {
-  mode: UmbrellaMode;
-  decision: 'allowed' | 'denied' | 'advisory' | 'bypassed';
-  deltas: Array<Record<string, unknown>>;
-};
+type UmbrellaOperation =
+  | 'identity.physics.license'
+  | 'governance.engine.license'
+  | 'apex.alignment.advisory'
+  | 'umbrella.sim.pack'
+  | 'umbrella.market.forecast'
+  | 'umbrella.identity.mirror'
+  | 'umbrella.crossworld.access'
+  | 'structural.truth.license';
 
-export type KernelLane = {
-  name: string;
-  result: {
-    results: Array<{
-      result: {
-        data: Record<string, unknown>;
-        meta: { source: string; governance: UmbrellaMode };
-      };
-    }>;
-  };
-};
+const app = new Hono<{ Bindings: Bindings }>();
 
-export type KernelSuccess = {
-  ok: true;
-  data: Record<string, unknown>;
-  lanes: KernelLane[];
-  meta: {
-    messageId: string;
-    type: string;
-    umbrella: string;
-    identity: { propagated: true };
-    governance: GovernanceMetadata;
-  };
-};
+app.use(
+  '*',
+  cors({
+    origin: '*',
+    allowHeaders: ['Content-Type', 'Authorization'],
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+  }),
+);
 
-export type KernelFailure = {
-  ok: false;
-  error: { code: string; message: string };
-  meta?: {
-    messageId?: string;
-    type?: string;
-    governance?: GovernanceMetadata;
-  };
-};
-
-export type KernelResult = KernelSuccess | KernelFailure;
-
-type UniverseState = {
-  tick: number;
-  properties: Record<string, unknown>;
-  lastOperation: null | { messageId: string; type: string };
-};
-
-const KERNEL_OBJECT_NAME = 'portal-kernel';
-const KERNEL_BRIDGE_URL = 'https://portal-kernel.invalid/api/kernel/message';
-const MAX_OS_BRIDGE_URL = 'https://max-os-1.invalid/kernel/message';
-
-const UNIVERSE_STATE_KEY = 'universe';
-const INTROSPECTION_PREFIX = 'introspection.';
-
-const UMBRELLA_OPERATIONS: Record<string, string> = {
-  '/umbrella/identity/license': 'identity.physics.license',
-  '/umbrella/governance/license': 'governance.engine.license',
-  '/umbrella/apex/advisory': 'apex.alignment.advisory',
-  '/umbrella/sim/pack': 'umbrella.sim.pack',
-  '/umbrella/market/forecast': 'umbrella.market.forecast',
-  '/umbrella/identity/mirror': 'umbrella.identity.mirror',
-  '/umbrella/crossworld/access': 'umbrella.crossworld.access',
-  '/umbrella/structural/truth/license': 'structural.truth.license'
-};
-
-export const app = new Hono<{ Bindings: Bindings }>();
-
-app.use('*', cors({
-  origin: '*',
-  allowHeaders: ['Content-Type', 'Authorization'],
-  allowMethods: ['GET', 'POST', 'OPTIONS']
+app.get('/', (context) => context.json({
+  status: 'Portal-OS live',
+  worker: 'planetary-max',
+  mode: context.env.PLANETARY_MODE,
+  umbrella: context.env.UMBRELLA_ENFORCEMENT,
 }));
 
-app.get('/', (c) =>
-  c.json({
-    status: 'Portal-OS live',
-    worker: 'planetary-max',
-    mode: c.env.PLANETARY_MODE ?? 'single',
-    umbrella: resolveUmbrellaMode(c.env.UMBRELLA_ENFORCEMENT)
-  })
-);
+app.get('/health', (context) => context.json({ status: 'ok', service: 'planetary-max' }));
 
-app.get('/health', (c) =>
-  c.json({
-    status: 'ok',
-    service: 'planetary-max',
-    umbrella: resolveUmbrellaMode(c.env.UMBRELLA_ENFORCEMENT)
-  })
-);
+app.post('/api/kernel/message', async (context) => {
+  const identity = bearerToken(context.req.header('Authorization'));
+  if (!identity) return unauthenticated();
 
-app.post('/api/kernel/message', async (c) => {
-  const value = await parseEnvelope(c.req.raw, c.req.header('Authorization'), c.env);
-  return value instanceof Response ? value : kernelResponse(c.env, value);
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return invalidJson('Request body must be JSON');
+  }
+  if (!isRecord(body) || typeof body.type !== 'string' || body.type.trim() === '') {
+    return invalidMessage('type and object payload are required');
+  }
+  const payload = body.payload === undefined ? {} : body.payload;
+  if (!isJsonObject(payload)) return invalidMessage('type and object payload are required');
+
+  const envelope = createEnvelope(
+    body.type,
+    payload,
+    identity,
+    isJsonObject(body.governanceContext) ? body.governanceContext : {},
+    typeof body.id === 'string' && body.id.trim() !== '' ? body.id : undefined,
+  );
+  return kernelResponse(context.env, envelope);
 });
 
-app.get('/api/autonomy', (c) =>
-  routeKernelMessage(c.env, c.req.header('Authorization'), 'autonomy.state', {})
-);
+app.post('/os/kernel/message', async (context) => {
+  const identity = bearerToken(context.req.header('Authorization'));
+  if (!identity) return unauthenticated();
 
-app.get('/universe/state', (c) =>
-  routeKernelMessage(c.env, c.req.header('Authorization'), 'universe.state', {})
-);
-
-app.get('/universe/umbrella', (c) =>
-  routeKernelMessage(c.env, c.req.header('Authorization'), 'universe.umbrella', {})
-);
-
-for (const [path, type] of Object.entries(UMBRELLA_OPERATIONS)) {
-  app.post(path, async (c) => {
-    const value = await parsePayload(c.req.raw, c.req.header('Authorization'), c.env);
-    return value instanceof Response
-      ? value
-      : kernelResponse(
-          c.env,
-          createEnvelope(type, value.payload, value.identity, value.governanceContext, c.env.UMBRELLA_ENFORCEMENT)
-        );
-  });
-}
-
-app.post('/universe/tick', async (c) => {
-  const value = await parsePayload(c.req.raw, c.req.header('Authorization'), c.env, true);
-  return value instanceof Response
-    ? value
-    : kernelResponse(
-        c.env,
-        createEnvelope('universe.tick', value.payload, value.identity, value.governanceContext, c.env.UMBRELLA_ENFORCEMENT)
-      );
-});
-
-app.post('/os/kernel/message', async (c) => {
-  const parsed = await parseEnvelope(c.req.raw, c.req.header('Authorization'), c.env);
-  if (parsed instanceof Response) return parsed;
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return invalidJson('Request body must be JSON');
+  }
+  if (!isRecord(body) || typeof body.type !== 'string' || body.type.trim() === '') {
+    return invalidMessage('type and object payload are required');
+  }
+  const payload = body.payload === undefined ? {} : body.payload;
+  if (!isJsonObject(payload)) return invalidMessage('type and object payload are required');
+  const envelope = createEnvelope(
+    body.type,
+    payload,
+    identity,
+    isJsonObject(body.governanceContext) ? body.governanceContext : {},
+    typeof body.id === 'string' && body.id.trim() !== '' ? body.id : undefined,
+  );
 
   try {
-    const preflight = {
-      ...parsed,
-      type: 'umbrella.os',
-      payload: { ...parsed.payload, operation: parsed.type }
-    };
-
-    const governed = await callKernel(c.env, preflight);
-    const checked = await readKernelResult(governed, preflight, 'PortalKernel');
-
-    if (!checked.ok) return resultResponse(checked, governed.status);
-
-    const response = await c.env.MAX_OS_1.fetch(
-      new Request(MAX_OS_BRIDGE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed)
-      })
+    const result = await callMaxOsKernel(context.env, envelope);
+    return context.json({
+      ok: true,
+      data: result,
+      meta: { source: 'max-os-1', via: 'planetary-max → MAX-OS-1' },
+    });
+  } catch (error) {
+    if (error instanceof MaxOsClientError) {
+      return Response.json(
+        { ok: false, error: error.response, meta: { source: 'max-os-1', status: error.status } },
+        { status: error.status },
+      );
+    }
+    return Response.json(
+      { ok: false, error: { message: 'MAX-OS-1 bridge unavailable' } },
+      { status: 503 },
     );
-
-    return resultResponse(await readKernelResult(response, parsed, 'MAX-OS-1'), response.status);
-  } catch {
-    return failureResponse('MAX_OS_UNAVAILABLE', 'MAX-OS-1 bridge unavailable', 503);
   }
+});
+
+app.get('/api/autonomy', async (context) =>
+  normalizedRequest(context.env, context.req.header('Authorization'), 'autonomy.state', {}));
+app.get('/universe/state', async (context) =>
+  normalizedRequest(context.env, context.req.header('Authorization'), 'universe.state', {}));
+app.get('/universe/umbrella', async (context) =>
+  normalizedRequest(context.env, context.req.header('Authorization'), 'universe.umbrella', {}));
+
+const umbrellaRoutes: ReadonlyArray<readonly [string, UmbrellaOperation]> = [
+  ['/umbrella/identity/license', 'identity.physics.license'],
+  ['/umbrella/governance/license', 'governance.engine.license'],
+  ['/umbrella/apex/advisory', 'apex.alignment.advisory'],
+  ['/umbrella/sim/pack', 'umbrella.sim.pack'],
+  ['/umbrella/market/forecast', 'umbrella.market.forecast'],
+  ['/umbrella/identity/mirror', 'umbrella.identity.mirror'],
+  ['/umbrella/crossworld/access', 'umbrella.crossworld.access'],
+  ['/umbrella/structural/truth/license', 'structural.truth.license'],
+];
+
+for (const [route, operation] of umbrellaRoutes) {
+  app.post(route, (context) => umbrellaRequest(
+    context.env,
+    context.req.header('Authorization'),
+    context.req.raw,
+    operation,
+  ));
+}
+
+app.post('/universe/tick', async (context) => {
+  let payload: JsonObject = {};
+  const contentType = context.req.header('Content-Type') ?? '';
+  if (contentType.includes('application/json')) {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return invalidJson('Request body must be JSON');
+    }
+    if (!isJsonObject(body)) return invalidJson('Tick payload must be an object');
+    payload = body;
+  }
+  return normalizedRequest(context.env, context.req.header('Authorization'), 'universe.tick', payload);
 });
 
 attachIntrospectionRoutes(app);
@@ -194,15 +182,11 @@ async function routeKernelMessage(
   env: Bindings,
   authorization: string | undefined,
   type: string,
-  payload: Record<string, unknown>
+  payload: JsonObject,
 ): Promise<Response> {
-  const identity = await authenticatedIdentity(authorization, env);
-  return identity instanceof Response
-    ? identity
-    : kernelResponse(
-        env,
-        createEnvelope(type, payload, identity, { surface: 'worker-api' }, env.UMBRELLA_ENFORCEMENT)
-      );
+  const identity = bearerToken(authorization);
+  if (!identity) return unauthenticated();
+  return kernelResponse(env, createEnvelope(type, payload, identity, { surface: 'worker-api' }), true);
 }
 
 async function parseEnvelope(
@@ -235,345 +219,184 @@ async function parseEnvelope(
 
 async function parsePayload(
   request: Request,
-  authorization: string | undefined,
-  env: Bindings,
-  optionalBody = false
-): Promise<{ identity: string; payload: Record<string, unknown>; governanceContext: Record<string, unknown> } | Response> {
-  const identity = await authenticatedIdentity(authorization, env);
-  if (identity instanceof Response) return identity;
-
-  if (optionalBody && !request.headers.get('Content-Type')?.includes('application/json')) {
-    return { identity, payload: {}, governanceContext: {} };
-  }
-
-  const body = await readJsonObject(request, 'Request body must be JSON');
-  if (body instanceof Response) return body;
-
-  const governanceContext = isRecord(body.governanceContext) ? body.governanceContext : {};
-  const { governanceContext: _ignored, ...payload } = body;
-
-  return { identity, payload, governanceContext };
-}
-
-async function readJsonObject(
-  request: Request,
-  message: string
-): Promise<Record<string, unknown> | Response> {
+  type: UmbrellaOperation,
+): Promise<Response> {
+  const identity = bearerToken(authorization);
+  if (!identity) return unauthenticated();
+  let payload: unknown;
   try {
     const value: unknown = await request.json();
     return isRecord(value) ? value : failureResponse('INVALID_JSON', message, 400);
   } catch {
-    return failureResponse('INVALID_JSON', message, 400);
+    return invalidJson('Umbrella payload must be JSON');
   }
+  if (!isJsonObject(payload)) return invalidJson('Umbrella payload must be an object');
+  return kernelResponse(
+    env,
+    createEnvelope(type, payload, identity, { surface: 'worker-umbrella' }),
+    true,
+  );
 }
 
 export function createEnvelope(
   type: string,
-  payload: Record<string, unknown>,
+  payload: JsonObject,
   identity: string,
-  governanceContext: Record<string, unknown>,
-  configuredMode?: string
+  governanceContext: JsonObject,
+  id: string = crypto.randomUUID(),
 ): KernelEnvelope {
-  return {
-    id: crypto.randomUUID(),
-    type,
-    payload,
-    identity,
-    governanceContext: {
-      ...governanceContext,
-      umbrellaMode: resolveUmbrellaMode(configuredMode)
-    }
-  };
+  return { id, type, payload, identity, governanceContext };
 }
 
 async function kernelResponse(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
   try {
     const response = await callKernel(env, envelope);
-    return resultResponse(await readKernelResult(response, envelope, 'PortalKernel'), response.status);
-  } catch {
-    return failureResponse('KERNEL_UNAVAILABLE', 'Kernel bridge unavailable', 503);
-  }
-}
-
-export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
-  const kernel = env.PORTAL_KERNEL.get(env.PORTAL_KERNEL.idFromName(KERNEL_OBJECT_NAME));
-  return kernel.fetch(
-    new Request(KERNEL_BRIDGE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(envelope)
-    })
-  );
-}
-
-export async function readKernelResult(
-  response: Response,
-  envelope: KernelEnvelope,
-  fallbackSource: string
-): Promise<KernelResult> {
-  let value: unknown;
-
-  try {
-    value = await response.json();
-  } catch {
-    return failureResult('INVALID_KERNEL_RESPONSE', 'Kernel returned invalid JSON', envelope);
-  }
-
-  if (!isRecord(value)) {
-    return failureResult('INVALID_KERNEL_RESPONSE', 'Kernel returned an invalid result', envelope);
-  }
-
-  if (value.ok === false) {
-    const error = isRecord(value.error) ? value.error : {};
-    return failureResult(
-      typeof error.code === 'string' ? error.code : 'KERNEL_ERROR',
-      typeof error.message === 'string' ? error.message : 'Kernel request failed',
-      envelope
+    const result = await response.json<KernelResult>();
+    const status = result.ok ? response.status : kernelErrorStatus(result.error.code);
+    if (!result.ok || !normalize) return Response.json(result, { status });
+    return Response.json(normalizeResponse(result, envelope), { status });
+  } catch (error) {
+    console.error('Worker to kernel bridge failed', error);
+    return Response.json(
+      { ok: false, error: { code: 'KERNEL_UNAVAILABLE', message: 'Kernel bridge unavailable' } },
+      { status: 503 },
     );
   }
+}
 
-  if (!response.ok) {
-    return failureResult('KERNEL_ERROR', 'Kernel request failed', envelope);
-  }
-
-  const mode = resolveEnvelopeMode(envelope);
-  const lanes = Array.isArray(value.lanes)
-    ? sanitizeLanes(value.lanes, fallbackSource, mode)
-    : [];
-
-  const data = isRecord(value.data) ? value.data : extractLaneData(lanes);
-
-  if (!lanes.length) {
-    lanes.push(makeLane(laneForType(envelope.type), data, fallbackSource, mode));
-  }
-
-  const meta = isRecord(value.meta) ? value.meta : {};
-
+export function normalizeResponse(
+  result: KernelResult,
+  envelope: KernelEnvelope,
+): Record<string, unknown> {
+  if (!result.ok) return result;
   return {
     ok: true,
     data,
     lanes,
     meta: {
-      messageId: typeof meta.messageId === 'string' ? meta.messageId : envelope.id,
-      type: typeof meta.type === 'string' ? meta.type : envelope.type,
-      umbrella: typeof meta.umbrella === 'string' ? meta.umbrella : umbrellaUpdateName(envelope.type),
-      identity: { propagated: true },
-      governance: governanceFromUnknown(meta.governance, envelope)
-    }
+      messageId: result.messageId ?? envelope.id,
+      type: result.type ?? envelope.type,
+      identity: result.identity ?? envelope.identity,
+      route: result.route ?? result.lanes,
+    },
   };
 }
 
-function sanitizeLanes(value: unknown[], source: string, mode: UmbrellaMode): KernelLane[] {
-  return value
-    .filter(isRecord)
-    .map((candidate) =>
-      makeLane(
-        typeof candidate.name === 'string' ? candidate.name : 'kernel',
-        extractCandidateData(candidate),
-        source,
-        mode
-      )
-    );
+export function extractLaneData(response: unknown): unknown {
+  if (!isRecord(response)) return {};
+  if ('output' in response) return response.output;
+  const results = response.results;
+  if (Array.isArray(results) && isRecord(results[0]) && 'data' in results[0]) return results[0].data;
+
+  if (!isRecord(response.result)) return {};
+  const legacyLanes = response.result.lanes;
+  if (!Array.isArray(legacyLanes) || !isRecord(legacyLanes[0]) || !isRecord(legacyLanes[0].result)) return {};
+  const legacyResults = legacyLanes[0].result.results;
+  if (!Array.isArray(legacyResults) || !isRecord(legacyResults[0]) || !isRecord(legacyResults[0].result)) return {};
+  return legacyResults[0].result.data ?? {};
 }
 
-function extractCandidateData(value: Record<string, unknown>): Record<string, unknown> {
-  if (isRecord(value.data)) return value.data;
+export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
+  if (envelope.type.startsWith('os.') && (env.MAX_OS_1 || env.MAXOS_URL)) {
+    try {
+      return Response.json(await callMaxOsKernel(env, envelope));
+    } catch (error) {
+      if (error instanceof MaxOsClientError) {
+        return Response.json(error.response, { status: error.status });
+      }
+      throw error;
+    }
+  }
 
-  const result =
-    isRecord(value.result) && Array.isArray(value.result.results)
-      ? value.result.results[0]
-      : undefined;
-
-  return isRecord(result) &&
-    isRecord(result.result) &&
-    isRecord(result.result.data)
-    ? result.result.data
-    : {};
-}
-
-export function extractLaneData(lanes: KernelLane[]): Record<string, unknown> {
-  return lanes[0]?.result.results[0]?.result.data ?? {};
-}
-
-export function resultResponse(result: KernelResult, upstreamStatus: number): Response {
-  return Response.json(result, {
-    status: result.ok
-      ? upstreamStatus >= 200 && upstreamStatus < 300
-        ? upstreamStatus
-        : 200
-      : errorStatus(result.error.code, upstreamStatus)
+  const body = JSON.stringify(envelope);
+  const request = new Request('http://portal-kernel/api/kernel/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
   });
 }
 
-function errorStatus(code: string, upstream = 500): number {
-  if (code === 'UNAUTHENTICATED') return 401;
-  if (code === 'FORBIDDEN') return 403;
-  if (code === 'INVALID_JSON' || code === 'INVALID_MESSAGE') return 400;
-  if (code === 'INVALID_KERNEL_RESPONSE') return 502;
-  return upstream >= 400 ? upstream : 500;
-}
-
-export function failureResponse(code: string, message: string, status: number): Response {
-  return Response.json({ ok: false, error: { code, message } }, { status });
-}
-
-function failureResult(code: string, message: string, envelope?: KernelEnvelope): KernelFailure {
-  return {
-    ok: false,
-    error: { code, message },
-    ...(envelope
-      ? {
-          meta: {
-            messageId: envelope.id,
-            type: envelope.type,
-            governance: defaultGovernance(resolveEnvelopeMode(envelope))
-          }
-        }
-      : {})
-  };
-}
-
-async function authenticatedIdentity(
-  header: string | undefined,
-  env: Pick<Bindings, 'IDENTITY_JWT_SECRET' | 'IDENTITY_JWT_ISSUER' | 'IDENTITY_JWT_AUDIENCE'>
-): Promise<string | Response> {
-  const token = /^Bearer\s+(.+)$/i.exec(header ?? '')?.[1]?.trim();
-  if (!token) return failureResponse('UNAUTHENTICATED', 'Bearer token required', 401);
-
-  if (!env.IDENTITY_JWT_SECRET || !(await verifyJwt(token, env))) {
-    return failureResponse(
-      env.IDENTITY_JWT_SECRET ? 'UNAUTHENTICATED' : 'IDENTITY_UNAVAILABLE',
-      env.IDENTITY_JWT_SECRET ? 'Bearer token required' : 'Identity verification is not configured',
-      env.IDENTITY_JWT_SECRET ? 401 : 503
-    );
+  if (env.PORTAL_KERNEL) {
+    const id = env.PORTAL_KERNEL.idFromName('portal-kernel');
+    return env.PORTAL_KERNEL.get(id).fetch(request);
   }
-
-  return token;
-}
-
-async function verifyJwt(
-  token: string,
-  env: Pick<Bindings, 'IDENTITY_JWT_SECRET' | 'IDENTITY_JWT_ISSUER' | 'IDENTITY_JWT_AUDIENCE'>
-): Promise<boolean> {
-  try {
-    const [encodedHeader, encodedClaims, signature] = token.split('.');
-    if (!encodedHeader || !encodedClaims || !signature) return false;
-
-    const header = JSON.parse(new TextDecoder().decode(base64Url(encodedHeader)));
-    const claims = JSON.parse(new TextDecoder().decode(base64Url(encodedClaims)));
-
-    if (header.alg !== 'HS256') return false;
-    if (typeof claims.sub !== 'string' || !claims.sub.trim()) return false;
-    if (typeof claims.exp !== 'number' || claims.exp <= Math.floor(Date.now() / 1000)) return false;
-
-    if (env.IDENTITY_JWT_ISSUER && claims.iss !== env.IDENTITY_JWT_ISSUER) return false;
-
-    if (
-      env.IDENTITY_JWT_AUDIENCE &&
-      !(
-        claims.aud === env.IDENTITY_JWT_AUDIENCE ||
-        (Array.isArray(claims.aud) && claims.aud.includes(env.IDENTITY_JWT_AUDIENCE))
-      )
-    ) return false;
-
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(env.IDENTITY_JWT_SECRET),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-
-    const signatureBuffer = base64Url(signature).buffer;
-    return crypto.subtle.verify(
-      'HMAC',
-      key,
-      signatureBuffer,
-      new TextEncoder().encode(`${encodedHeader}.${encodedClaims}`)
-    );
-  } catch {
-    return false;
+  if (env.KERNEL_SERVICE) return env.KERNEL_SERVICE.fetch(request);
+  if (env.KERNEL_URL) {
+    const target = `${env.KERNEL_URL.replace(/\/$/, '')}/api/kernel/message`;
+    return fetch(target, { method: 'POST', headers: request.headers, body });
   }
-}
-
-function base64Url(value: string): Uint8Array {
-  const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4));
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return bytes;
+  throw new Error('Configure PORTAL_KERNEL, KERNEL_SERVICE or KERNEL_URL');
 }
 
 export function resolveUmbrellaMode(value: string | undefined): UmbrellaMode {
   return value === 'advisory' || value === 'off' || value === 'strict' ? value : 'strict';
 }
 
-function resolveEnvelopeMode(envelope: KernelEnvelope): UmbrellaMode {
-  return resolveUmbrellaMode(
-    typeof envelope.governanceContext.umbrellaMode === 'string'
-      ? envelope.governanceContext.umbrellaMode
-      : undefined
+function kernelErrorStatus(code: string): number {
+  if (code === 'UNAUTHENTICATED') return 401;
+  if (code === 'FORBIDDEN') return 403;
+  if (code === 'INVALID_MESSAGE' || code === 'INVALID_JSON' || code === 'ROUTE_NOT_FOUND') return 400;
+  if (code === 'INVARIANT_VIOLATION') return 422;
+  return 500;
+}
+
+function unauthenticated(): Response {
+  return Response.json(
+    { ok: false, error: { code: 'UNAUTHENTICATED', message: 'Bearer token required' } },
+    { status: 401 },
   );
 }
 
-function defaultGovernance(mode: UmbrellaMode): GovernanceMetadata {
-  return {
-    mode,
-    decision:
-      mode === 'strict'
-        ? 'denied'
-        : mode === 'advisory'
-        ? 'advisory'
-        : 'bypassed',
-    deltas: []
-  };
+function invalidJson(message: string): Response {
+  return Response.json({ ok: false, error: { code: 'INVALID_JSON', message } }, { status: 400 });
 }
 
-function governanceFromUnknown(
-  value: unknown,
-  envelope: KernelEnvelope
-): GovernanceMetadata {
-  if (
-    isRecord(value) &&
-    typeof value.mode === 'string' &&
-    typeof value.decision === 'string' &&
-    Array.isArray(value.deltas)
-  ) {
-    return value as GovernanceMetadata;
-  }
-
-  return defaultGovernance(resolveEnvelopeMode(envelope));
+function invalidMessage(message: string): Response {
+  return Response.json({ ok: false, error: { code: 'INVALID_MESSAGE', message } }, { status: 400 });
 }
 
-function laneForType(type: string): string {
-  const idx = type.lastIndexOf('.');
-  return idx >= 0 ? type.slice(0, idx) : type;
-}
+export class PortalKernel {
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: Pick<Bindings, 'PLANETARY_MODE' | 'UMBRELLA_ENFORCEMENT'>,
+  ) {}
 
-function makeLane(
-  name: string,
-  data: Record<string, unknown>,
-  source: string,
-  mode: UmbrellaMode
-): KernelLane {
-  return {
-    name,
-    result: {
-      results: [
-        {
-          result: {
-            data,
-            meta: { source, governance: mode }
-          }
-        }
-      ]
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method !== 'POST' || !['/api/kernel/message', '/kernel/message'].includes(url.pathname)) {
+      return Response.json({ status: 'ok', service: 'portal-kernel' });
     }
-  };
+
+    let rawEnvelope: unknown;
+    try {
+      rawEnvelope = await request.json();
+    } catch {
+      return invalidJson('Kernel envelope must be JSON');
+    }
+
+    try {
+      const envelope = parseKernelEnvelope(rawEnvelope);
+      const result = await new KernelEngine(
+        this.state.storage,
+        this.env.PLANETARY_MODE,
+        this.env.UMBRELLA_ENFORCEMENT,
+      ).dispatch(envelope);
+      return Response.json(result);
+    } catch (error) {
+      const failure = error instanceof KernelContractError
+        ? error
+        : new KernelContractError('KERNEL_ERROR', 'Kernel execution failed');
+      return Response.json(
+        {
+          ok: false,
+          messageId: isRecord(rawEnvelope) && typeof rawEnvelope.id === 'string' ? rawEnvelope.id : undefined,
+          error: { code: failure.code, message: failure.message },
+        },
+        { status: kernelErrorStatus(failure.code) },
+      );
+    }
+  }
 }
 
-function umbrellaUpdateName(type: string): string {
-  return type.startsWith('umbrella.') ? type : `umbrella.${type}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+export { app };
+export default app;

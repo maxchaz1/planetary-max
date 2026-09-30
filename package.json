@@ -5,8 +5,7 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test": "vitest run --reporter=verbose",
-    "deploy": "wrangler deploy"
+    "test": "vitest run"
   },
   "dependencies": {
     "hono": "^4.13.7"
