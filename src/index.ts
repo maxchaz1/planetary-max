@@ -484,10 +484,11 @@ async function verifyJwt(
       ['verify']
     );
 
+    const signatureBuffer = base64Url(signature).buffer;
     return crypto.subtle.verify(
       'HMAC',
       key,
-      base64Url(signature),
+      signatureBuffer,
       new TextEncoder().encode(`${encodedHeader}.${encodedClaims}`)
     );
   } catch {
