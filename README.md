@@ -107,21 +107,23 @@ This will execute the full boot sequence:
 
 ### Worker and Kernel Bridge
 
-The Hono Worker is the only public entrypoint. It validates the GUI bearer
-token, builds the shared envelope, and calls the `PortalKernel` Durable Object
-through `callKernel()`. The Durable Object owns the lane registry and persists
-SIM, substrate, and universe state in Durable Object storage.
+Cloudflare Workers cannot start local subprocesses. Deploy the Python adapter
+behind the `portal-kernel` Worker and connect it through the required
+`KERNEL_SERVICE` service binding. The Portal-OS Worker enforces identity and
+governance, dispatches envelopes through the declarative MAX-OS-1 lane router,
+persists deterministic lane state through the `MAXOS_STATE` R2 binding, and
+sends the orchestrated envelope to that binding. Identity metadata is
+structurally checked at the edge; the kernel remains authoritative for
+credential verification. The Worker does not define local demo routes. For
+local adapter development:
 
-The shared envelope is:
+Phase 11 adds deterministic request tracing, structured JSON logs, no-op-safe
+metrics, bounded kernel/substrate retries and timeouts, and a kernel circuit
+breaker. Runtime limits are configured through the timeout, retry, and circuit
+variables in `wrangler.toml`.
 
-```json
-{
-  "id": "message-123",
-  "type": "sim",
-  "payload": { "observation": "stable" },
-  "identity": "bearer-token",
-  "governanceContext": {}
-}
+```bash
+python kernel/http_adapter.py --port 8788
 ```
 
 Successful kernel responses expose aligned `lanes`, `results`, and `output`
