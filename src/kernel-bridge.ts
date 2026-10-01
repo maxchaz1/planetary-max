@@ -8,6 +8,7 @@ import type {
   PlanetaryMode,
 } from './contracts';
 
+export type { Bindings, JsonObject, JsonValue };
 export type UmbrellaMode = 'strict' | 'advisory' | 'off';
 
 export const UMBRELLA_MODES = ['strict', 'advisory', 'off'] as const;
