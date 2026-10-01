@@ -144,7 +144,7 @@ export async function readKernelResult(
     error: {
       code: 'INVALID_RESPONSE',
       message: 'Kernel response was not a valid Phase-12 result payload',
-      details: parsed,
+      details: parsed as JsonValue | undefined,
     },
   };
 }

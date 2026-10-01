@@ -7,7 +7,6 @@
 
 import { Context, Hono } from 'hono';
 import {
-  Bindings,
   authenticatedIdentity,
   callKernel,
   createEnvelope,
@@ -16,6 +15,7 @@ import {
   resultResponse,
 } from './kernel-bridge';
 import type {
+  Bindings,
   KernelResult,
   JsonObject,
   JsonValue,
@@ -86,6 +86,24 @@ async function handleIntrospection(
     const result = await readKernelResult(response, envelope, 'PortalKernel');
     if (!result.ok) return resultResponse(result, response.status);
 
+    // Safely narrow governance.mode
+    const governanceMode = result.meta &&
+      typeof result.meta === 'object' &&
+      result.meta.governance &&
+      !Array.isArray(result.meta.governance) &&
+      'mode' in result.meta.governance
+        ? (result.meta.governance as JsonObject).mode
+        : 'strict';
+
+    // Safely narrow identity.propagated
+    const identityPropagated = result.meta &&
+      typeof result.meta === 'object' &&
+      result.meta.identity &&
+      !Array.isArray(result.meta.identity) &&
+      'propagated' in result.meta.identity
+        ? (result.meta.identity as JsonObject).propagated
+        : false;
+
     const payload: IntrospectionResponse = {
       ok: true,
       data: (result.data ?? {}) as Record<string, unknown>,
@@ -93,20 +111,10 @@ async function handleIntrospection(
         kind,
         source: 'kernel',
         timestamp: Date.now(),
-        governance: (() => {
-          const meta = result.meta;
-          if (!meta || typeof meta !== 'object') return 'strict';
-          const gov = (meta as JsonObject).governance;
-          return typeof gov === 'object' && gov?.mode ? (gov.mode as 'strict' | 'advisory' | 'off') : 'strict';
-        })(),
+        governance: governanceMode as 'strict' | 'advisory' | 'off',
         identity: {
           subject: extractSubject(identity),
-          propagated: (() => {
-            const meta = result.meta;
-            if (!meta || typeof meta !== 'object') return false;
-            const id = (meta as JsonObject).identity;
-            return typeof id === 'object' && id?.propagated ? Boolean(id.propagated) : false;
-          })(),
+          propagated: Boolean(identityPropagated),
         },
       },
     };
