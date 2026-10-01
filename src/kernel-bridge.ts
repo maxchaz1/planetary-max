@@ -88,7 +88,13 @@ export function normalizeResponse(response: unknown): unknown {
   if (typeof response === 'object' && response !== null && 'ok' in response) {
     return response;
   }
-  return { ok: false, error: { code: 'INVALID_RESPONSE', message: 'Response format invalid' } };
+  return {
+    ok: false,
+    error: {
+      code: 'INVALID_RESPONSE',
+      message: 'Response format invalid',
+    },
+  } satisfies KernelResult;
 }
 
 export function failureResponse(code: string, message: string, status: number): Response {
@@ -118,6 +124,13 @@ export async function readKernelResult(
       source,
       responseStatus: response.status,
       envelopeType: envelope?.type,
+      envelope: {
+        type: envelope?.type ?? 'unknown',
+        id: envelope?.id ?? 'unknown',
+        planetaryMode: envelope?.planetaryMode ?? 'single',
+        umbrellaEnforcement: envelope?.umbrellaEnforcement ?? 'strict',
+        entropyTick: envelope?.entropyTick ?? 0,
+      },
       governance: { mode: resolveUmbrellaMode(envelope?.governanceContext?.umbrellaMode as string | undefined) },
     },
     error: {
