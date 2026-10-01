@@ -1,4 +1,4 @@
-import type { KernelEnvelope, KernelLaneResult, KernelResult } from './contracts';
+import type { JsonValue, KernelEnvelope, KernelLaneResult, KernelResult } from './contracts';
 import { resolveUmbrellaMode, type UmbrellaMode } from './kernel-bridge';
 
 type UniverseState = {
@@ -16,7 +16,10 @@ export type LaneExecutionContext = {
   planetaryMode: string;
   umbrellaEnforcement: string;
   umbrellaMode: UmbrellaMode;
+  identityCurvature: number;
+  entropyTick: number;
   storage: DurableObjectStorage;
+  env: Record<string, unknown>;
 };
 
 export type LaneHandler = (
@@ -112,7 +115,7 @@ function aggregateLaneResult(lane: string, data: unknown): KernelLaneResult {
   return {
     lane,
     result: {
-      results: [{ result: { data } }],
+      results: [{ result: { data: data as JsonValue } }],
     },
   };
 }

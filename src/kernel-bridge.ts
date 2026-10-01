@@ -1,4 +1,12 @@
-import type { Bindings, JsonObject, KernelEnvelope, KernelResult, KernelLane, PlanetaryMode } from './contracts';
+import type {
+  JsonObject,
+  JsonValue,
+  Bindings,
+  KernelEnvelope,
+  KernelLane,
+  KernelResult,
+  PlanetaryMode,
+} from './contracts';
 
 export type UmbrellaMode = 'strict' | 'advisory' | 'off';
 
@@ -118,7 +126,7 @@ export async function readKernelResult(
   return {
     ok: false,
     messageId: envelope?.id,
-    type: envelope?.type,
+    type: envelope?.type ?? 'unknown',
     identity: envelope?.identity,
     meta: {
       source,

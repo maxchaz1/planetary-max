@@ -15,6 +15,11 @@ import {
   readKernelResult,
   resultResponse,
 } from './kernel-bridge';
+import type {
+  KernelResult,
+  JsonObject,
+  JsonValue,
+} from './contracts';
 
 export type IntrospectionKind =
   | 'sim.behavior'
@@ -83,15 +88,25 @@ async function handleIntrospection(
 
     const payload: IntrospectionResponse = {
       ok: true,
-      data: result.data,
+      data: (result.data ?? {}) as Record<string, unknown>,
       meta: {
         kind,
         source: 'kernel',
         timestamp: Date.now(),
-        governance: result.meta.governance.mode,
+        governance: (() => {
+          const meta = result.meta;
+          if (!meta || typeof meta !== 'object') return 'strict';
+          const gov = (meta as JsonObject).governance;
+          return typeof gov === 'object' && gov?.mode ? (gov.mode as 'strict' | 'advisory' | 'off') : 'strict';
+        })(),
         identity: {
           subject: extractSubject(identity),
-          propagated: result.meta.identity.propagated,
+          propagated: (() => {
+            const meta = result.meta;
+            if (!meta || typeof meta !== 'object') return false;
+            const id = (meta as JsonObject).identity;
+            return typeof id === 'object' && id?.propagated ? Boolean(id.propagated) : false;
+          })(),
         },
       },
     };
