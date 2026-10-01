@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { KernelEnvelope, JsonObject } from './contracts';
+import type { KernelEnvelope, JsonObject, JsonValue } from './contracts';
 import { KernelEngine, type LaneExecutionContext } from './kernel-engine';
 
-function envelope(type: string, payload: Record<string, unknown> = {}): KernelEnvelope {
+function envelope(type: string, payload: JsonObject = {}): KernelEnvelope {
   return {
     id: `message-${type}`,
     type,
@@ -14,11 +14,11 @@ function envelope(type: string, payload: Record<string, unknown> = {}): KernelEn
 }
 
 function engine(governanceContext: JsonObject = {}): KernelEngine {
-  const values = new Map<string, unknown>();
+  const values = new Map<string, JsonValue>();
   const storage = {
     get: async <T>(key: string): Promise<T | undefined> => values.get(key) as T | undefined,
     put: async (key: string, value: unknown): Promise<void> => {
-      values.set(key, structuredClone(value));
+      values.set(key, structuredClone(value) as JsonValue);
     },
   } as unknown as DurableObjectStorage;
   const context: LaneExecutionContext = {

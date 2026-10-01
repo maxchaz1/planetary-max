@@ -86,23 +86,34 @@ async function handleIntrospection(
     const result = await readKernelResult(response, envelope, 'PortalKernel');
     if (!result.ok) return resultResponse(result, response.status);
 
-    // Safely narrow governance.mode
-    const governanceMode = result.meta &&
-      typeof result.meta === 'object' &&
-      result.meta.governance &&
-      !Array.isArray(result.meta.governance) &&
-      'mode' in result.meta.governance
-        ? (result.meta.governance as JsonObject).mode
-        : 'strict';
+    // Safely narrow governance.mode with proper type guards
+    const governanceMode: 'strict' | 'advisory' | 'off' = (() => {
+      if (!result.meta || typeof result.meta !== 'object' || Array.isArray(result.meta)) {
+        return 'strict';
+      }
+      const gov = (result.meta as JsonObject).governance;
+      if (!gov || typeof gov !== 'object' || Array.isArray(gov)) {
+        return 'strict';
+      }
+      const mode = (gov as JsonObject).mode;
+      if (mode === 'strict' || mode === 'advisory' || mode === 'off') {
+        return mode as 'strict' | 'advisory' | 'off';
+      }
+      return 'strict';
+    })();
 
-    // Safely narrow identity.propagated
-    const identityPropagated = result.meta &&
-      typeof result.meta === 'object' &&
-      result.meta.identity &&
-      !Array.isArray(result.meta.identity) &&
-      'propagated' in result.meta.identity
-        ? (result.meta.identity as JsonObject).propagated
-        : false;
+    // Safely narrow identity.propagated with proper type guards
+    const identityPropagated: boolean = (() => {
+      if (!result.meta || typeof result.meta !== 'object' || Array.isArray(result.meta)) {
+        return false;
+      }
+      const id = (result.meta as JsonObject).identity;
+      if (!id || typeof id !== 'object' || Array.isArray(id)) {
+        return false;
+      }
+      const propagated = (id as JsonObject).propagated;
+      return Boolean(propagated);
+    })();
 
     const payload: IntrospectionResponse = {
       ok: true,
@@ -111,10 +122,10 @@ async function handleIntrospection(
         kind,
         source: 'kernel',
         timestamp: Date.now(),
-        governance: governanceMode as 'strict' | 'advisory' | 'off',
+        governance: governanceMode,
         identity: {
           subject: extractSubject(identity),
-          propagated: Boolean(identityPropagated),
+          propagated: identityPropagated,
         },
       },
     };

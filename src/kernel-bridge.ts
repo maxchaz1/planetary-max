@@ -124,6 +124,9 @@ export async function readKernelResult(
     return parsed as KernelResult;
   }
 
+  const umbrellaMode = envelope?.governanceContext?.umbrellaMode;
+  const modeValue = typeof umbrellaMode === 'string' ? umbrellaMode : undefined;
+
   return {
     ok: false,
     messageId: envelope?.id,
@@ -140,12 +143,12 @@ export async function readKernelResult(
         umbrellaEnforcement: envelope?.umbrellaEnforcement ?? 'strict',
         entropyTick: envelope?.entropyTick ?? 0,
       },
-      governance: { mode: resolveUmbrellaMode(envelope?.governanceContext?.umbrellaMode as string | undefined) },
+      governance: { mode: resolveUmbrellaMode(modeValue) },
     },
     error: {
       code: 'INVALID_RESPONSE',
       message: 'Kernel response was not a valid Phase-12 result payload',
-      details: parsed as JsonValue | undefined,
+      details: typeof parsed === 'object' && parsed !== null ? (parsed as JsonValue) : undefined,
     },
   };
 }
