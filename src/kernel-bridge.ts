@@ -135,7 +135,7 @@ export async function readKernelResult(
     meta: {
       source,
       responseStatus: response.status,
-      envelopeType: envelope?.type,
+      envelopeType: envelope?.type ?? 'unknown',
       envelope: {
         type: envelope?.type ?? 'unknown',
         id: envelope?.id ?? 'unknown',
