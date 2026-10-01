@@ -68,3 +68,30 @@ app.all('*', async (c) => {
 
 export { app };
 export default app;
+
+export type {
+  Bindings,
+  JsonObject,
+  JsonValue,
+  KernelEnvelope,
+  KernelLane,
+  KernelLaneResult,
+  KernelResult,
+  PlanetaryMode,
+} from './contracts';
+export type { UmbrellaMode } from './kernel-bridge';
+export {
+  authenticatedIdentity,
+  callKernel,
+  createEnvelope,
+  extractLaneData,
+  failureResponse,
+  normalizeResponse,
+  readKernelResult,
+  resolvePlanetaryMode,
+  resolveUmbrellaMode,
+  resultResponse,
+  UMBRELLA_MODES,
+} from './kernel-bridge';
+export { PortalKernel } from './do/PortalKernel';
+export { KernelEngine, type LaneExecutionContext, type LaneHandler } from './kernel-engine';
