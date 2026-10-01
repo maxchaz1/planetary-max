@@ -1,4 +1,27 @@
-import type { Bindings, KernelEnvelope } from './contracts';
+import type { Bindings, JsonObject, KernelEnvelope, KernelResult, KernelLane, PlanetaryMode } from './contracts';
+
+export type UmbrellaMode = 'strict' | 'advisory' | 'off';
+
+export const UMBRELLA_MODES = ['strict', 'advisory', 'off'] as const;
+
+export function resolveUmbrellaMode(value?: string | UmbrellaMode | null): UmbrellaMode {
+  if (value === 'strict' || value === 'advisory' || value === 'off') {
+    return value;
+  }
+  return 'strict';
+}
+
+export function resolvePlanetaryMode(value?: string | PlanetaryMode | null): PlanetaryMode {
+  if (
+    value === 'single' ||
+    value === 'multi' ||
+    value === 'crossworld' ||
+    value === 'umbrella'
+  ) {
+    return value;
+  }
+  return 'single';
+}
 
 export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promise<Response> {
   const body = JSON.stringify(envelope);
@@ -26,10 +49,11 @@ export async function callKernel(env: Bindings, envelope: KernelEnvelope): Promi
 
 export function createEnvelope(
   type: string,
-  payload: Record<string, unknown>,
+  payload: JsonObject,
   identity: string,
-  governanceContext: Record<string, unknown>,
-  umbrellaMode?: string,
+  governanceContext: JsonObject,
+  umbrellaMode?: UmbrellaMode,
+  planetaryMode?: PlanetaryMode,
 ): KernelEnvelope {
   return {
     id: `envelope-${crypto.randomUUID()}`,
@@ -38,15 +62,24 @@ export function createEnvelope(
     identity,
     governanceContext: {
       ...governanceContext,
-      umbrellaMode: umbrellaMode || 'strict',
+      umbrellaMode: resolveUmbrellaMode(umbrellaMode),
     },
+    identityCurvature: 1,
+    entropyTick: 0,
+    planetaryMode: resolvePlanetaryMode(planetaryMode),
+    umbrellaEnforcement: resolveUmbrellaMode(umbrellaMode),
+    laneRouting: {
+      route: [type],
+      lane: type.split('.').slice(0, -1).join('.') || type,
+    },
+    metadata: { source: 'kernel-bridge' },
   };
 }
 
-export function extractLaneData(lanes: Array<{ name: string; result?: { results?: Array<{ result?: { data?: unknown } }> } }>): unknown {
+export function extractLaneData(lanes: KernelLane[]): unknown {
   for (const lane of lanes) {
     const result = lane.result?.results?.[0]?.result?.data;
-    if (result) return result;
+    if (result !== undefined) return result;
   }
   return null;
 }
@@ -62,22 +95,50 @@ export function failureResponse(code: string, message: string, status: number): 
   return Response.json({ ok: false, error: { code, message } }, { status });
 }
 
-export function resultResponse(result: unknown, status: number): Response {
+export function resultResponse(result: KernelResult | JsonObject, status: number): Response {
   return Response.json(result, { status });
 }
 
 export async function readKernelResult(
   response: Response,
-  envelope: KernelEnvelope,
-  source: string,
-): Promise<unknown> {
-  const data = await response.json();
-  return { ok: response.ok, data, meta: { source, type: envelope.type, identity: { propagated: true }, governance: { mode: 'strict' } } };
+  envelope?: Partial<KernelEnvelope>,
+  source = 'kernel',
+): Promise<KernelResult> {
+  const parsed = await safeJson(response);
+  if (parsed !== null && typeof parsed === 'object' && 'ok' in parsed) {
+    return parsed as KernelResult;
+  }
+
+  return {
+    ok: false,
+    messageId: envelope?.id,
+    type: envelope?.type,
+    identity: envelope?.identity,
+    meta: {
+      source,
+      responseStatus: response.status,
+      envelopeType: envelope?.type,
+      governance: { mode: resolveUmbrellaMode(envelope?.governanceContext?.umbrellaMode as string | undefined) },
+    },
+    error: {
+      code: 'INVALID_RESPONSE',
+      message: 'Kernel response was not a valid Phase-12 result payload',
+      details: parsed,
+    },
+  };
 }
 
-export async function authenticatedIdentity(authHeader: string | undefined, env: Bindings): Promise<string | Response> {
+export async function authenticatedIdentity(authHeader: string | undefined, _env: Bindings): Promise<string | Response> {
   if (!authHeader?.startsWith('Bearer ')) {
     return failureResponse('UNAUTHENTICATED', 'Missing or invalid Bearer token', 401);
   }
   return authHeader.slice(7);
+}
+
+async function safeJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
