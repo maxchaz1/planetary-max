@@ -19,8 +19,24 @@ export type Bindings = {
   PORTAL_KERNEL?: KernelNamespace;
   KERNEL_SERVICE?: KernelService;
   KERNEL_URL?: string;
+  MAX_OS_1?: KernelService;
+  IDENTITY_JWT_SECRET?: string;
+  IDENTITY_JWT_ISSUER?: string;
+  IDENTITY_JWT_AUDIENCE?: string;
   PLANETARY_MODE?: string;
   UMBRELLA_ENFORCEMENT?: string;
+};
+
+export type KernelLane = {
+  name: string;
+  result?: {
+    results?: Array<{
+      result?: {
+        data?: unknown;
+        meta?: Record<string, unknown>;
+      };
+    }>;
+  };
 };
 
 export type KernelLaneResult = {
@@ -29,6 +45,7 @@ export type KernelLaneResult = {
     results: Array<{
       result: {
         data: unknown;
+        meta?: Record<string, unknown>;
       };
     }>;
   };
@@ -40,10 +57,13 @@ export type KernelResult = {
   type?: unknown;
   identity?: unknown;
   route?: unknown;
+  data?: unknown;
+  lanes?: KernelLane[];
   result?: {
-    lanes?: KernelLaneResult[];
+    lanes?: KernelLane[];
     [key: string]: unknown;
   };
+  meta?: Record<string, unknown>;
   error?: { code?: string; message?: string };
   [key: string]: unknown;
 };
