@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
