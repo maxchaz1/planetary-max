@@ -6,7 +6,7 @@ import { KernelError, MaxOsError, toErrorResponse } from './maxos/resilience/err
 import { KernelClient } from './maxos/resilience/kernel';
 import { parsePositiveInteger } from './maxos/resilience/timeouts';
 import { SessionOrchestrator } from './maxos/session/orchestrator';
-import { createDurableSubstrate } from './maxos/state/substrate';
+import { createD1Substrate } from './maxos/state/substrate';
 import type { MaxOsHonoEnv } from './maxos/types';
 
 const app = new Hono<MaxOsHonoEnv>();
@@ -17,7 +17,7 @@ app.all('*', async (c) => {
   try {
     const maxAttempts = parsePositiveInteger(c.env.MAX_RETRY_ATTEMPTS, 'MAX_RETRY_ATTEMPTS', 10);
     const retryBaseDelayMs = parsePositiveInteger(c.env.RETRY_BASE_DELAY_MS, 'RETRY_BASE_DELAY_MS', 10_000);
-    const substrate = createDurableSubstrate(c.env.MAXOS_STATE, {
+    const substrate = createD1Substrate(c.env.DB, {
       observability,
       retry: { baseDelayMs: retryBaseDelayMs, maxAttempts },
       timeoutMs: parsePositiveInteger(c.env.SUBSTRATE_TIMEOUT_MS, 'SUBSTRATE_TIMEOUT_MS'),
@@ -79,19 +79,3 @@ export type {
   KernelResult,
   PlanetaryMode,
 } from './contracts';
-export type { UmbrellaMode } from './kernel-bridge';
-export {
-  authenticatedIdentity,
-  callKernel,
-  createEnvelope,
-  extractLaneData,
-  failureResponse,
-  normalizeResponse,
-  readKernelResult,
-  resolvePlanetaryMode,
-  resolveUmbrellaMode,
-  resultResponse,
-  UMBRELLA_MODES,
-} from './kernel-bridge';
-export { PortalKernel } from './do/PortalKernel';
-export { KernelEngine, type LaneExecutionContext, type LaneHandler } from './kernel-engine';

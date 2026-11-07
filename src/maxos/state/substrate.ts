@@ -2,7 +2,7 @@ import type { ObservabilityContext } from '../observability/tracing';
 import { MaxOsError, SubstrateError } from '../resilience/errors';
 import { retry, type RetryPolicy } from '../resilience/retries';
 import { substrateTimeout, withTimeout } from '../resilience/timeouts';
-import { R2StateRepository } from './adapters/r2';
+import { D1StateRepository } from './adapters/d1';
 import {
   isSessionState,
   isSIMState,
@@ -44,7 +44,7 @@ export class Substrate {
     this.repositories = {
       sessions: repositories.sessions ?? new InMemoryRepository<SessionState>(),
       sim: repositories.sim ?? new InMemoryRepository<SIMState>(),
-      tec: repositories.tec ?? new InMemoryRepository<TECState>(),
+      tec: repositories.tec ?? new InMemoryRepository<T​​ECState>(),
       universe: repositories.universe ?? new InMemoryRepository<UniverseState>(),
     };
     this.observability = options.observability;
@@ -60,7 +60,7 @@ export class Substrate {
     return this.executeOperation('sim.transition', () => this.applyTransition(this.repositories.sim, transition));
   }
 
-  transitionTEC(transition: StateTransition<TECState>): Promise<StateModel<TECState>> {
+  transitionTEC(transition: StateTransition<T​​ECState>): Promise<StateModel<T​​ECState>> {
     return this.executeOperation('tec.transition', () => this.applyTransition(this.repositories.tec, transition));
   }
 
@@ -76,7 +76,7 @@ export class Substrate {
     return this.executeOperation('sim.read', () => this.repositories.sim.read(key));
   }
 
-  readTEC(key: string): Promise<StateModel<TECState> | null> {
+  readTEC(key: string): Promise<StateModel<T​​ECState> | null> {
     return this.executeOperation('tec.read', () => this.repositories.tec.read(key));
   }
 
@@ -157,13 +157,13 @@ export class Substrate {
   }
 }
 
-export function createDurableSubstrate(bucket: R2Bucket, options: SubstrateOptions = {}): Substrate {
+export function createD1Substrate(database: D1Database, options: SubstrateOptions = {}): Substrate {
   return new Substrate(
     {
-      sessions: new R2StateRepository(bucket, createStateCodec(isSessionState), 'maxos/sessions/'),
-      sim: new R2StateRepository(bucket, createStateCodec(isSIMState), 'maxos/sim/'),
-      tec: new R2StateRepository(bucket, createStateCodec(isTECState), 'maxos/tec/'),
-      universe: new R2StateRepository(bucket, createStateCodec(isUniverseState), 'maxos/universe/'),
+      sessions: new D1StateRepository(database, createStateCodec(isSessionState), 'maxos_state'),
+      sim: new D1StateRepository(database, createStateCodec(isSIMState), 'maxos_state'),
+      tec: new D1StateRepository(database, createStateCodec(isTECState), 'maxos_state'),
+      universe: new D1StateRepository(database, createStateCodec(isUniverseState), 'maxos_state'),
     },
     options,
   );

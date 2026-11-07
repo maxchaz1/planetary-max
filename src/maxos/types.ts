@@ -135,7 +135,7 @@ export type MaxOsBindings = {
   MAX_OS_VERSION: string;
   PORTAL_OS_PHASE: string;
   KERNEL_SERVICE: Fetcher;
-  MAXOS_STATE: R2Bucket;
+  DB: D1Database;
   KERNEL_TIMEOUT_MS: string;
   SUBSTRATE_TIMEOUT_MS: string;
   MAX_RETRY_ATTEMPTS: string;
