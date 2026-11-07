@@ -12,6 +12,7 @@
     "hono": "^4.13.7"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "latest",
     "@cloudflare/workers-types": "latest",
     "esbuild": "^0.23.1",
     "typescript": "^5.9.3",
