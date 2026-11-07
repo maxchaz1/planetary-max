@@ -1,6 +1,6 @@
 name = "planetary-max"
 main = "src/index.ts"
-compatibility_date = "2026-09-17"
+compatibility_date = "2026-09-23"
 
 [vars]
 PLANETARY_MODE = "active"
@@ -14,9 +14,20 @@ RETRY_BASE_DELAY_MS = "50"
 CIRCUIT_FAILURE_THRESHOLD = "5"
 CIRCUIT_COOLDOWN_MS = "30000"
 
+# Telemetry & Macro-Mesh Database
+[[d1_databases]]
+binding = "DB"
+database_name = "planetary-max-dbplanetary-max-db"
+database_id = "8794f674-7402-4f4f-93af-7da6a5ea5a8f"
+
 [[services]]
 binding = "KERNEL_SERVICE"
 service = "portal-kernel"
+
+# Inter-Worker RPC Binding to BEEMAX
+[[services]]
+binding = "BEEMAX_CORE"
+service = "beemax-production-core"
 
 [[r2_buckets]]
 binding = "MAXOS_STATE"
