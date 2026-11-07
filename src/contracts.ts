@@ -16,7 +16,17 @@ export type KernelService = {
   fetch(request: Request): Promise<Response>;
 };
 
+/** Cloudflare bindings required by the planetary-max ↔ BEEMAX integration. */
+export interface Env {
+  DB: D1Database;
+  BEEMAX_CORE: KernelService;
+}
+
 export type Bindings = {
+  /** Optional in unit-test environments; configured for deployed planetary-max. */
+  DB?: D1Database;
+  /** Optional until the inter-worker binding is configured in the environment. */
+  BEEMAX_CORE?: KernelService;
   PORTAL_KERNEL?: KernelNamespace;
   KERNEL_SERVICE?: KernelService;
   KERNEL_URL?: string;
